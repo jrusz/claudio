@@ -18,11 +18,11 @@
 FROM registry.access.redhat.com/ubi10/nodejs-22@sha256:046420a0f946ccada9f13a0c3a476687ae8ff7c1a7b698e65b0209014a720efd
 
 ARG TARGETARCH
-
 USER root
-ENV HOME /root
+ENV HOME /home/default
 
-RUN dnf install -y skopeo podman jq
+# Basic tools
+RUN dnf install -y skopeo podman jq 
 
 # Claude
 # https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
@@ -69,7 +69,13 @@ ENV K8S_MCP_V v0.0.52
 
 # Conf
 COPY conf/ ${HOME}/
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Setup non root user
+WORKDIR /home/default
+RUN chown -R default:0 ${HOME} && \
+    chmod -R ug+rwx ${HOME}
+USER default
 
 # Entrypoint
-COPY entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["entrypoint.sh"]
