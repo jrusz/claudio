@@ -1,6 +1,82 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
-  ]
+    "config:recommended",
+    "group:all"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update Claude Code CLI version",
+      "managerFilePatterns": [
+        "Containerfile"
+      ],
+      "matchStrings": [
+        "ENV\\s+CLAUDE_V\\s+(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "@anthropic-ai/claude-code",
+      "autoReplaceStringTemplate": "ENV CLAUDE_V {{newValue}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Google Cloud SDK version",
+      "managerFilePatterns": [
+        "Containerfile"
+      ],
+      "matchStrings": [
+        "ENV\\s+GCLOUD_V\\s+(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "google/cloud-sdk",
+      "autoReplaceStringTemplate": "ENV GCLOUD_V {{newVersion}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Slack MCP server version",
+      "managerFilePatterns": [
+        "Containerfile"
+      ],
+      "matchStrings": [
+        "ENV\\s+SLACK_MCP_V\\s+v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "korotovsky/slack-mcp-server",
+      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+\\.\\d+)$",
+      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+      "autoReplaceStringTemplate": "ENV SLACK_MCP_V v{{newVersion}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Update GitLab MCP binary version",
+      "managerFilePatterns": [
+        "Containerfile"
+      ],
+      "matchStrings": [
+        "ENV\\s+GITLAB_MCP_V\\s+(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "gitlab-releases",
+      "registryUrlTemplate": "https://gitlab.com",
+      "depNameTemplate": "fforster/gitlab-mcp",
+      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+\\.\\d+)$",
+      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+      "autoReplaceStringTemplate": "ENV GITLAB_MCP_V {{newVersion}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Kubernetes MCP server version",
+      "managerFilePatterns": [
+        "Containerfile"
+      ],
+      "matchStrings": [
+        "ENV\\s+K8S_MCP_V\\s+v(?<currentValue>\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "containers/kubernetes-mcp-server",
+      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?)$",
+      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?:-[0-9A-Za-z.-]+)?$",
+      "autoReplaceStringTemplate": "ENV K8S_MCP_V v{{newVersion}}"
+    }
+  ],
+  "packageRules": []
 }
