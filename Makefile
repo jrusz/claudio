@@ -14,6 +14,7 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
+# testing
 
 VERSION ?= 1.0.0-dev
 CONTAINER_MANAGER ?= podman
