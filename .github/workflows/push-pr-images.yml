@@ -1,0 +1,122 @@
+name: Push PR Images
+
+on:
+  workflow_run:
+    workflows:
+    - Build
+    types:
+      - completed
+
+jobs:
+  push:
+    name: Push PR images to GHCR
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      statuses: write
+
+    env:
+      GHCR_REGISTRY: ghcr.io
+      GHCR_IMAGE_REPO: ${{ format('{0}/{1}', 'ghcr.io', github.repository) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download claudio assets
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          name: claudio-arm64-and-amd64
+        continue-on-error: true
+
+      - name: Check if artifacts are present
+        id: artifact-check
+        run: |
+          if [ -d "claudio-amd64" ] && [ -d "claudio-arm64" ]; then
+            echo "Artifacts found."
+          else
+            echo "Error: Artifacts not found."
+            exit 1
+          fi
+
+      - name: Get claudio build information
+        run: |
+          if [ ! -f claudio-image ]; then
+            echo "Error: claudio-image file not found in artifacts"
+            exit 1
+          fi
+          echo "image=$(cat claudio-image)" >> "$GITHUB_ENV"
+
+      - name: Get PR details
+        id: pr
+        run: |
+          # Extract PR number and head SHA from workflow_run event
+          PR_NUMBER=$(jq -r '.pull_requests[0].number' <<< '${{ toJson(github.event.workflow_run) }}')
+          HEAD_SHA=$(jq -r '.pull_requests[0].head.sha' <<< '${{ toJson(github.event.workflow_run) }}')
+
+          # Validate extracted values
+          if [ "$PR_NUMBER" = "null" ] || [ -z "$PR_NUMBER" ]; then
+            echo "Error: Failed to extract PR number from workflow_run event"
+            exit 1
+          fi
+          if [ "$HEAD_SHA" = "null" ] || [ -z "$HEAD_SHA" ]; then
+            echo "Error: Failed to extract HEAD SHA from workflow_run event"
+            exit 1
+          fi
+
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "sha=$HEAD_SHA" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image tag from image name
+        run: |
+          # Extract just the tag part (pr-123) from full image name
+          echo "IMAGE_TAG=$(echo ${{ env.image }} | cut -d: -f2)" >> $GITHUB_ENV
+          echo "IMAGE_REPO=${{ env.GHCR_IMAGE_REPO }}" >> $GITHUB_ENV
+          echo "IMAGE_SOURCE_TAG=$(echo ${{ env.image }} | cut -d: -f2)" >> $GITHUB_ENV
+
+      - name: Load images from artifacts
+        run: |
+          podman load -i claudio-arm64/*.tar
+          podman load -i claudio-amd64/*.tar
+
+      - name: Push arch images
+        run: make oci-push-arch
+
+      - name: Create and push manifest
+        run: |
+          make oci-manifest-build
+          make oci-manifest-push
+
+      - name: Create commit status
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+            -f state=success \
+            -f target_url="https://github.com/${{ github.repository }}/pkgs/container/claudio/${{ env.IMAGE_TAG }}" \
+            -f description="Image: ${{ env.image }}" \
+            -f context="Container Image / PR Image Published"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create commit status on failure
+        if: failure()
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+            -f state=error \
+            -f description="Failed to publish PR image" \
+            -f context="Container Image / PR Image Published"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
