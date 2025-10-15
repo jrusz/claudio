@@ -3,16 +3,23 @@ name: Build
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_REPO: ${{ format('{0}/{1}', 'ghcr.io', github.repository) }}
-  IMAGE_TAG: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.number, github.sha) || github.sha }}
+  # GHCR configuration
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE_REPO: ${{ format('{0}/{1}', 'ghcr.io', github.repository) }}
+
+  # Quay configuration
+  QUAY_REGISTRY: quay.io
+  QUAY_IMAGE_REPO: quay.io/aipcc-cicd/claudio
 
 jobs:
-  build:
+  build-and-upload:
+    name: Build and Upload Images
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
@@ -21,57 +28,134 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
 
-    runs-on: ${{ matrix.runner }}
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
 
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Set image repo and tag based on event
+      run: |
+        if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          # Tag events: build for Quay
+          echo "IMAGE_REPO=${{ env.QUAY_IMAGE_REPO }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+        elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          # PRs: build for GHCR with pr-X tag
+          echo "IMAGE_REPO=${{ env.GHCR_IMAGE_REPO }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=pr-${{ github.event.number }}" >> $GITHUB_ENV
+        else
+          # Main branch: build for GHCR with commit SHA
+          echo "IMAGE_REPO=${{ env.GHCR_IMAGE_REPO }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+        fi
 
     - name: Build image (${{ matrix.arch }})
       env:
-        IMAGE_TAG: ${{ env.IMAGE_TAG }}-${{ matrix.arch }}
+        IMAGE_NAME: ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}-${{ matrix.arch }}
+        ARTIFACT_NAME: claudio-${{ matrix.arch }}
       run: |
         make oci-build
+        make oci-save
 
-    - name: Push image (${{ matrix.arch }})
-      if: github.event_name == 'push'
-      env:
-        IMAGE_TAG: ${{ env.IMAGE_TAG }}-${{ matrix.arch }}
-      run: |
-        make oci-push
+    - name: Upload image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: claudio-${{ matrix.arch }}
+        path: claudio-${{ matrix.arch }}.tar
 
-  manifest:
-    if: github.event_name == 'push'
-    needs: build
+  combine-artifacts:
+    name: Combine artifacts
+    needs: build-and-upload
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+
+    steps:
+    - name: Download claudio images
+      uses: actions/download-artifact@v4
+      with:
+        pattern: claudio-*
+
+    - name: Save image name for PR push workflow
+      run: |
+        echo "${{ env.GHCR_IMAGE_REPO }}:pr-${{ github.event.number }}" > claudio-image
+
+    - name: Upload combined artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: claudio-arm64-and-amd64
+        path: claudio-*
+
+  push-ghcr-main:
+    name: Push to GHCR (main branch)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-and-upload
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
 
+    - name: Download claudio images
+      uses: actions/download-artifact@v4
+      with:
+        pattern: claudio-*
+
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
       with:
-        registry: ${{ env.REGISTRY }}
+        registry: ${{ env.GHCR_REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Create and push manifest
+    - name: Load and push images
+      env:
+        IMAGE_REPO: ${{ env.GHCR_IMAGE_REPO }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        make oci-load
+        make oci-push-arch
+
+    - name: Create and push manifest as latest
+      env:
+        IMAGE_REPO: ${{ env.GHCR_IMAGE_REPO }}
+        IMAGE_TAG: latest
+        IMAGE_SOURCE_TAG: ${{ github.sha }}
       run: |
         make oci-manifest-build
         make oci-manifest-push
 
-    - name: Tag as latest (main branch only)
-      run: |
-        make oci-tag
-        make oci-push
+  push-quay:
+    name: Push to Quay (tag release)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-upload
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Download claudio images
+      uses: actions/download-artifact@v4
+      with:
+        pattern: claudio-*
+
+    - name: Log in to Quay Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.QUAY_REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+
+    - name: Load and push images to Quay
       env:
-        IMAGE_SOURCE_TAG: ${{ env.IMAGE_TAG }}
-        IMAGE_TAG: latest
+        IMAGE_REPO: ${{ env.QUAY_IMAGE_REPO }}
+        IMAGE_TAG: ${{ github.ref_name }}
+      run: |
+        make oci-load
+        make oci-push-arch
+        make oci-manifest-build
+        make oci-manifest-push

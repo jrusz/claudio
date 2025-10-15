@@ -22,24 +22,39 @@ CONTAINER_MANAGER ?= podman
 IMAGE_REPO ?= quay.io/redhat-aipcc/claudio
 IMAGE_TAG ?= v${VERSION}
 IMAGE_NAME ?= $(IMAGE_REPO):$(IMAGE_TAG)
+IMAGE_SOURCE_TAG ?= $(IMAGE_TAG)
+
+# Artifact naming
+ARTIFACT_NAME ?= claudio
 
 # Build actions
-.PHONY: oci-build oci-manifest-build oci-manifest-push oci-tag oci-push
+.PHONY: oci-build oci-save oci-load oci-push-arch oci-manifest-build oci-manifest-push oci-tag oci-push
 
 oci-build:
 	${CONTAINER_MANAGER} build -t $(IMAGE_NAME) .
 
+oci-save:
+	${CONTAINER_MANAGER} save -m -o $(ARTIFACT_NAME).tar $(IMAGE_NAME)
+
+oci-load:
+	${CONTAINER_MANAGER} load -i $(ARTIFACT_NAME)-amd64/$(ARTIFACT_NAME)-amd64.tar
+	${CONTAINER_MANAGER} load -i $(ARTIFACT_NAME)-arm64/$(ARTIFACT_NAME)-arm64.tar
+
+oci-push-arch:
+	${CONTAINER_MANAGER} push $(IMAGE_REPO):$(IMAGE_TAG)-amd64
+	${CONTAINER_MANAGER} push $(IMAGE_REPO):$(IMAGE_TAG)-arm64
+
 oci-manifest-build:
 	${CONTAINER_MANAGER} manifest rm $(IMAGE_NAME) || true
-	${CONTAINER_MANAGER} manifest create --amend $(IMAGE_NAME)
-	${CONTAINER_MANAGER} manifest add --all $(IMAGE_NAME) $(IMAGE_NAME)-amd64
-	${CONTAINER_MANAGER} manifest add --all $(IMAGE_NAME) $(IMAGE_NAME)-arm64
+	${CONTAINER_MANAGER} manifest create $(IMAGE_NAME)
+	${CONTAINER_MANAGER} manifest add $(IMAGE_NAME) docker://$(IMAGE_REPO):$(IMAGE_SOURCE_TAG)-amd64
+	${CONTAINER_MANAGER} manifest add $(IMAGE_NAME) docker://$(IMAGE_REPO):$(IMAGE_SOURCE_TAG)-arm64
 
 oci-manifest-push:
 	${CONTAINER_MANAGER} manifest push $(IMAGE_NAME)
 
 oci-tag:
-	${CONTAINER_MANAGER} tag $(IMAGE_REPO):$(IMAGE_SOURCE_TAG) $(IMAGE_NAME) 
+	${CONTAINER_MANAGER} tag $(IMAGE_REPO):$(IMAGE_SOURCE_TAG) $(IMAGE_NAME)
 
 oci-push:
 	${CONTAINER_MANAGER} push $(IMAGE_NAME)
