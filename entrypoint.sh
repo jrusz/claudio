@@ -43,15 +43,12 @@ if [ -d "$HOME/workdir" ]; then
   cd "$HOME/workdir"
 fi
 
-# Run claude
-# https://github.com/anthropics/claude-code/issues/2425
-# When this is fixed just use
-# exec claude "$@"
-SESSIONID=$(uuidgen)
-CONTEXT_FILE=~/context.md
-: > "$CONTEXT_FILE"
+# Generate CLAUDE.md with imports from context.d
+CLAUDE_MD="${HOME}/.claude/CLAUDE.md"
+: >"$CLAUDE_MD"
 for c in ~/.claude/context.d/*.md; do
-  tee -a "$CONTEXT_FILE" < "$c"
+  [ -f "$c" ] && echo "@$c" >>"$CLAUDE_MD"
 done
-claude -p "$(cat "$CONTEXT_FILE")" --session-id "$SESSIONID" > /dev/null
-exec claude -r ${SESSIONID} --mcp-config ~/.claude/mcp.d/*.json "$@"
+
+# Run claude
+exec claude --mcp-config ~/.claude/mcp.d/*.json "$@"
