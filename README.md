@@ -28,6 +28,7 @@ CONTAINER_MANAGER=docker make oci-build
 
 Available targets:
 - `oci-build` - Build container image for native architecture
+- `oci-rebuild` - Remove existing image and rebuild from scratch (no cache)
 - `oci-push` - Push container image
 - `oci-tag` - Tag existing image with new tag
 - `oci-manifest-build` - Create multi-arch manifest from arch-tagged images
@@ -35,11 +36,12 @@ Available targets:
 
 ## Claudio Skills Reference
 
-During the image build, claudio clones [claudio-skills](https://github.com/aipcc-cicd/claudio-skills) into `/home/default/claudio-skills/` and:
+During the image build, claudio clones [claudio-skills](https://github.com/aipcc-cicd/claudio-skills) into `/home/claudio/claudio-skills/` and:
 
 1. **Fetches the specified git ref** — a branch, tag, or pull request head
-2. **Runs tool installers** — iterates over `claudio-plugin/tools/*/install.sh` and executes each one (e.g. jq, python dependencies)
-3. **Generates plugin configs** — registers skills and tools so Claude can discover them at runtime
+2. **Runs tool installers** — iterates over `claudio-plugin/tools/*/install.sh` and executes each one (e.g. jq, kubectl)
+3. **Installs Python dependencies** — installs packages from `claudio-plugin/tools/python/*-requirements.txt`
+4. **Generates plugin configs** — registers skills and tools so Claude can discover them at runtime
 
 The git ref is controlled by two build args:
 - `CS_REF_TYPE` — one of `branch`, `tag`, or `pr` (default: `branch`)
@@ -75,79 +77,67 @@ When developing changes to claudio-skills that affect a downstream image (e.g. a
 
 # Usage
 
-In order to make claudio OpenShift compliant the default user for the container is default, it is also part of the root group, under some circumstances when mapping host volumes podman is not able to access the volume (even with the right permissions), to avoid that siatuion we suggest when running locally to use `--user 0` to enforce default behavior by podman.
+The recommended way to run claudio locally is through a wrapper script. It handles volume mounts, user namespace mapping, and environment loading automatically.
+
+## Wrapper Script Setup
+
+Create `~/.local/bin/claudio` with the following content and make it executable (`chmod +x`):
+
+```bash
+#!/bin/bash
+
+# Load environment variables from ~/.config/claudio/.env if it exists
+ENV_FILE="${HOME}/.config/claudio/.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+fi
+
+podman run -it --rm --userns=keep-id \
+  -v ${HOME}/.kube/claudio-reader.kubeconfig:/home/claudio/.kube/config:ro \
+  -v ${HOME}/.config/gcloud:/home/claudio/.config/gcloud \
+  -v ${PWD}:/home/claudio/workdir \
+  -v ${HOME}/.docker/config.json:/home/claudio/.docker/config.json:ro \
+  -v ${HOME}/.gitconfig:/home/claudio/.gitconfig:ro \
+  -v ${HOME}/.ssh:/home/claudio/.ssh:ro \
+  -v ${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock \
+  -e SSH_AUTH_SOCK=/tmp/ssh-agent.sock \
+  -e GITLAB_TOKEN="${GITLAB_TOKEN}" \
+  -e ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID}" \
+  -e ANTHROPIC_VERTEX_PROJECT_QUOTA="${ANTHROPIC_VERTEX_PROJECT_QUOTA}" \
+  -e SLACK_XOXC_TOKEN="${SLACK_XOXC_TOKEN}" \
+  -e SLACK_XOXD_TOKEN="${SLACK_XOXD_TOKEN}" \
+  quay.io/aipcc-cicd/claudio:v0.4.1 --allowedTools "Write(*)" "Glob(*)" "Read(*)" "$@"
+```
+
+The gcloud mount shares your host's Google Cloud credentials with the container. This is required because claudio uses Google Vertex AI as its default Claude API provider — `ANTHROPIC_VERTEX_PROJECT_ID` and `ANTHROPIC_VERTEX_PROJECT_QUOTA` identify the GCP project, while the gcloud credentials handle authentication. Make sure you're logged in on the host first (`gcloud auth application-default login`).
+
+The kubeconfig mount expects a dedicated read-only kubeconfig at `~/.kube/claudio-reader.kubeconfig`. This keeps claudio's cluster access separate from your default kubeconfig.
+
+The `.gitconfig`, `.ssh`, and SSH agent socket mounts are only needed if you want claudio to interact with git repositories over SSH or create SSH-signed commits. If you only work with HTTPS remotes and unsigned commits, these can be omitted.
+
+Store your secrets in `~/.config/claudio/.env`:
+
+```bash
+GITLAB_TOKEN=...
+ANTHROPIC_VERTEX_PROJECT_ID=...
+ANTHROPIC_VERTEX_PROJECT_QUOTA=...
+SLACK_XOXC_TOKEN=xoxc-...
+SLACK_XOXD_TOKEN=xoxd-...
+```
 
 ## Working with Local Projects
 
-Claudio supports mounting your local project directory for interactive development. When you mount a directory to `/home/default/workdir`, claudio will automatically change to that directory before starting the Claude session, allowing you to work with your local files.
-
-Example mounting your current directory:
+The wrapper script mounts `${PWD}` to `/home/claudio/workdir` automatically. Run `claudio` from the root of your project to work with local files:
 
 ```bash
-podman run -it --rm --user 0 \
-        -v ${PWD}:/home/default/workdir:z \
-        -v claudio-gcp:/root/.config/gcloud:Z \
-        -v claudio-mcp-slack:/root/claude/mcp/slack:Z \
-        -e GITLAB_TOKEN='...' \
-        -e ANTHROPIC_VERTEX_PROJECT_ID=... \
-        -e ANTHROPIC_VERTEX_PROJECT_QUOTA=... \
-        -e SLACK_MCP_XOXC_TOKEN='xoxc-...' \
-        -e SLACK_MCP_XOXD_TOKEN='xoxd-...' \
-        -e K8S_MCP_KUBECONFIG_PATH=/opt/k8s/kubeconfig \
-        quay.io/redhat-aipcc/claudio:v1.0.0-dev
+cd ~/my-project
+claudio
 ```
 
-This allows you to use claudio with your local codebase, making file edits, running commands, and interacting with your project files directly.
-
-## Basic Setup
+## One-time Prompt
 
 ```bash
-# Create a volume to hold the auth for gcloud
-podman volume create claudio-gcp
-
-# Create a volume to hold cache for mcp slack
-podman volume create claudio-mcp-slack
-
-# Run claudio
-podman run -it --rm --user 0 \
-        -v ${PWD}/kubecofing:/home/claudio/.kube/config:z \
-        # Optional
-        -v claudio-gcp:/home/claudio/.config/gcloud:Z \
-        -e GITLAB_TOKEN='...' \
-        -e ANTHROPIC_VERTEX_PROJECT_ID=... \
-        -e ANTHROPIC_VERTEX_PROJECT_QUOTA=... \
-        -e SLACK_XOXC_TOKEN='xoxc-...' \
-        -e SLACK_XOXD_TOKEN='xoxd-...' \
-        quay.io/aipcc-cicd/claudio:v1.0.0-dev
-```
-
-Claudio on a host where user is already logged in on gcloud:
-
-```bash
-# Run claudio
-podman run -it --rm -user 0 \
-        -v ${PWD}/kubecofing:/home/claudio/.kube/config:z \
-        -v /home/$USER/.conf/gcloud:/home/claudio/.config/gcloud:z \
-        -e GITLAB_TOKEN='...' \
-        -e ANTHROPIC_VERTEX_PROJECT_ID=... \
-        -e ANTHROPIC_VERTEX_PROJECT_QUOTA=... \
-        -e SLACK_XOXC_TOKEN='xoxc-...' \
-        -e SLACK_XOXD_TOKEN='xoxd-...' \
-        quay.io/aipcc-cicd/claudio:v1.0.0-dev
-```
-
-Claudio one-time prompt
-
-```bash
-# Run claudio
-podman run -it --rm -user 0 \
-        -v ${PWD}/kubecofing:/home/claudio/.kube/config:z \
-        -v /home/$USER/.conf/gcloud:/home/claudio/.config/gcloud:z \
-        -e GITLAB_TOKEN='...' \
-        -e ANTHROPIC_VERTEX_PROJECT_ID=... \
-        -e ANTHROPIC_VERTEX_PROJECT_QUOTA=... \
-        -e SLACK_XOXC_TOKEN='xoxc-...' \
-        -e SLACK_XOXD_TOKEN='xoxd-...' \
-        quay.io/aipcc-cicd/claudio:v1.0.0-dev \
-                -p "do something for me Claudio"
+claudio -p "do something for me Claudio"
 ```
