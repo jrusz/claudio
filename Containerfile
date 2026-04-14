@@ -20,9 +20,23 @@ ARG TARGETARCH
 RUN dnf install -y git 
 
 
+# GCloud
+ENV GCLOUD_V 564.0.0
+ENV GCLOUD_BASE_URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_V}"
+ENV GCLOUD_URL="${GCLOUD_BASE_URL}-linux-x86_64.tar.gz"
+RUN set -eux; \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        export GCLOUD_URL="${GCLOUD_BASE_URL}-linux-arm.tar.gz"; \
+    fi; \
+    curl -L "$GCLOUD_URL" -o gcloud.tar.gz; \
+    tar -xzf gcloud.tar.gz -C /opt;
+
 # Claudio Skills
 ARG CS_REF_TYPE
 ARG CS_REF
+# CS_CACHE_KEY is the resolved commit SHA — changing it invalidates the layer
+# cache so we always get fresh content when the remote ref updates.
+ARG CS_CACHE_KEY
 ENV CS_REPO https://github.com/aipcc-cicd/claudio-skills.git
 RUN set -eux; \
     git init claudio-skills; \
@@ -33,18 +47,7 @@ RUN set -eux; \
     else \
         git fetch --depth 1 origin "${CS_REF}"; \
     fi; \
-    git checkout FETCH_HEAD; 
-
-# GCloud
-ENV GCLOUD_V 564.0.0
-ENV GCLOUD_BASE_URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_V}"
-ENV GCLOUD_URL="${GCLOUD_BASE_URL}-linux-x86_64.tar.gz"
-RUN set -eux; \
-    if [ "$TARGETARCH" = "arm64" ]; then \
-        export GCLOUD_URL="${GCLOUD_BASE_URL}-linux-arm.tar.gz"; \
-    fi; \
-    curl -L "$GCLOUD_URL" -o gcloud.tar.gz; \
-    tar -xzf gcloud.tar.gz -C /opt; 
+    git checkout FETCH_HEAD;
 
 # Claudio image    
 FROM registry.access.redhat.com/ubi10/python-312-minimal@sha256:3de23fb7f53a67937845591d68066d5f075a18826a6291dad2dd700cb1d4290a

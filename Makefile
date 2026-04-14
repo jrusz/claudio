@@ -36,16 +36,22 @@ CS_REF ?= main
 # Example when we create a tag version for claudio
 # CS_REF_TYPE  ?= tag
 # CS_REF ?= v0.1.0
+CS_REPO ?= https://github.com/aipcc-cicd/claudio-skills.git
+
+# Resolve the remote HEAD SHA for the skills ref so the build cache
+# invalidates automatically when the PR/branch gets new commits.
+CS_CACHE_KEY_CMD = $(if $(filter pr,$(CS_REF_TYPE)), \
+	git ls-remote $(CS_REPO) "refs/pull/$(CS_REF)/head" | cut -f1, \
+	git ls-remote $(CS_REPO) "$(CS_REF)" | head -1 | cut -f1)
+CS_CACHE_KEY ?= $(shell $(CS_CACHE_KEY_CMD))
+
+CS_BUILD_ARGS = --build-arg CS_REF=$(CS_REF) --build-arg CS_REF_TYPE=$(CS_REF_TYPE) --build-arg CS_CACHE_KEY=$(CS_CACHE_KEY)
 
 # Build actions
-.PHONY: oci-build oci-rebuild oci-save oci-load oci-push-arch oci-manifest-build oci-manifest-push oci-tag oci-push
+.PHONY: oci-build oci-save oci-load oci-push-arch oci-manifest-build oci-manifest-push oci-tag oci-push
 
 oci-build:
-	${CONTAINER_MANAGER} build --build-arg CS_REF=$(CS_REF) --build-arg CS_REF_TYPE=$(CS_REF_TYPE) -t $(IMAGE_NAME) .
-
-oci-rebuild:
-	${CONTAINER_MANAGER} rmi ${IMAGE_NAME}
-	${CONTAINER_MANAGER} build --build-arg CS_REF=$(CS_REF) --build-arg CS_REF_TYPE=$(CS_REF_TYPE) -t $(IMAGE_NAME) .
+	${CONTAINER_MANAGER} build $(CS_BUILD_ARGS) -t $(IMAGE_NAME) .
 
 oci-save:
 	${CONTAINER_MANAGER} save -m -o $(ARTIFACT_NAME).tar $(IMAGE_NAME)
